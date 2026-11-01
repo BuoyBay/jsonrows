@@ -1,0 +1,236 @@
+Private Sub ValidateJSONRowsInput(source As String, maxCharacters As Integer, maxDepth As Integer)
+    If maxCharacters < 1 Or maxCharacters > 16000000 Then Throw New InvalidArgumentException("JSONRows character limit must be 1..16000000")
+    If maxDepth < 1 Or maxDepth > 128 Then Throw New InvalidArgumentException("JSONRows depth limit must be 1..128")
+    If String.Len(source) > maxCharacters Then Throw New InvalidArgumentException("JSONRows character limit exceeded")
+    Dim quoted As Boolean
+    Dim escaped As Boolean
+    Dim depth As Integer
+    For Each ch As String In String.Chars(source)
+        If quoted Then
+            If escaped Then
+                escaped = False
+            ElseIf ch = "\\" Then
+                escaped = True
+            ElseIf ch = "\"" Then
+                quoted = False
+            End If
+        ElseIf ch = "\"" Then
+            quoted = True
+        ElseIf ch = "[" Or ch = "{" Then
+            depth += 1
+            If depth > maxDepth Then Throw New InvalidArgumentException("JSONRows depth limit exceeded")
+        ElseIf ch = "]" Or ch = "}" Then
+            depth -= 1
+        End If
+    Next
+End Sub
+
+Private Sub ValidateJSONRowsNumbers(item As JSONItem)
+    If item.IsNumber() Then
+        Dim number As Double = item.AsNumber().Value
+        If number <> number Or number > 1.7976931348623157e308 Or number < -1.7976931348623157e308 Then
+            Throw New InvalidArgumentException("JSONRows number exceeds finite Double range")
+        End If
+    ElseIf item.IsArray() Then
+        For i As Integer = 0 To item.Count() - 1
+            ValidateJSONRowsNumbers(item.ValueAt(i))
+        Next
+    ElseIf item.IsObject() Then
+        For Each key As String In item.Keys()
+            ValidateJSONRowsNumbers(item.Value(key))
+        Next
+    End If
+End Sub
+
+''' Immutable table of JSON objects. Returned mutable values are deep copies.
+Public Class JSONRowsTable
+    Private Property mData As JSONItem
+    Private Property mColumns As Array Of String = []
+    ' Compare-preserving lookup index; public columns retain encounter order.
+    Private Property mSortedColumnIndices As Array Of Integer = []
+
+    Public Sub Constructor(source As String, maxCharacters As Integer = 1000000, maxRows As Integer = 10000, maxColumns As Integer = 1000, maxDepth As Integer = 32)
+        If maxRows < 0 Or maxRows > 1000000 Then Throw New InvalidArgumentException("JSONRows row limit must be 0..1000000")
+        If maxColumns < 0 Or maxColumns > 10000 Then Throw New InvalidArgumentException("JSONRows column limit must be 0..10000")
+        ValidateJSONRowsInput(source, maxCharacters, maxDepth)
+        Dim data As JSONItem = Json.Parse(source)
+        If Not data.IsArray() Then Throw New InvalidArgumentException("JSONRows source must be an array of objects")
+        If data.Count() > maxRows Then Throw New InvalidArgumentException("JSONRows row limit exceeded")
+        For i As Integer = 0 To data.Count() - 1
+            Dim row As JSONItem = data.ValueAt(i)
+            If Not row.IsObject() Then Throw New InvalidArgumentException("JSONRows row at index " + String.From(i) + " must be an object")
+            For Each key As String In row.Keys()
+                If Me.ColumnIndex(key) < 0 Then
+                    If Array.Count(mColumns) >= maxColumns Then Throw New InvalidArgumentException("JSONRows column limit exceeded")
+                    Array.Append(mColumns, key)
+                    Dim newIndex As Integer = Array.Count(mColumns) - 1
+                    Array.Append(mSortedColumnIndices, newIndex)
+                    Dim slot As Integer = Array.Count(mSortedColumnIndices) - 1
+                    While slot > 0
+                        If String.Compare(mColumns(mSortedColumnIndices(slot - 1)), key, True) <= 0 Then Exit While
+                        mSortedColumnIndices(slot) = mSortedColumnIndices(slot - 1)
+                        slot -= 1
+                    End While
+                    mSortedColumnIndices(slot) = newIndex
+                End If
+            Next
+        Next
+        ValidateJSONRowsNumbers(data)
+        mData = data
+    End Sub
+
+    Public Property RowCount As Integer
+        Get
+            Return mData.Count()
+        End Get
+    End Property
+
+    Public Property ColumnCount As Integer
+        Get
+            Return Array.Count(mColumns)
+        End Get
+    End Property
+
+    Public Function Columns() As Array Of String
+        Return Array.Clone(mColumns)
+    End Function
+
+    Public Function ColumnIndex(name As String) As Integer
+        Dim low As Integer = 0
+        Dim high As Integer = Array.Count(mSortedColumnIndices) - 1
+        While low <= high
+            Dim middle As Integer = low + (high - low) \ 2
+            Dim original As Integer = mSortedColumnIndices(middle)
+            Dim compared As Integer = String.Compare(mColumns(original), name, True)
+            If compared = 0 Then Return original
+            If compared < 0 Then
+                low = middle + 1
+            Else
+                high = middle - 1
+            End If
+        End While
+        Return -1
+    End Function
+
+    Public Function ColumnName(index As Integer) As String
+        If index < 0 Or index >= Array.Count(mColumns) Then Throw New InvalidArgumentException("JSONRows column index out of bounds")
+        Return mColumns(index)
+    End Function
+
+    Private Function CheckedRow(index As Integer) As JSONItem
+        If index < 0 Or index >= mData.Count() Then Throw New InvalidArgumentException("JSONRows row index out of bounds")
+        Return mData.ValueAt(index)
+    End Function
+
+    Private Function CheckedCell(rowIndex As Integer, name As String) As JSONItem
+        Dim row As JSONItem = Me.CheckedRow(rowIndex)
+        If Not row.HasKey(name) Then Throw New InvalidArgumentException("JSONRows field is missing: " + name)
+        Return row.Value(name)
+    End Function
+
+    Public Function HasField(rowIndex As Integer, name As String) As Boolean
+        Return Me.CheckedRow(rowIndex).HasKey(name)
+    End Function
+
+    ''' Missing is -1; present fields use JSONItem.Kind* constants.
+    Public Function CellKind(rowIndex As Integer, name As String) As Integer
+        Dim row As JSONItem = Me.CheckedRow(rowIndex)
+        If Not row.HasKey(name) Then Return -1
+        Dim cell As JSONItem = row.Value(name)
+        If cell.IsNull() Then Return JSONItem.KindNull
+        If cell.IsBoolean() Then Return JSONItem.KindBoolean
+        If cell.IsNumber() Then Return JSONItem.KindNumber
+        If cell.IsString() Then Return JSONItem.KindString
+        If cell.IsArray() Then Return JSONItem.KindArray
+        Return JSONItem.KindObject
+    End Function
+
+    Public Function Cell(rowIndex As Integer, name As String) As JSONItem
+        Return Json.Parse(Json.Stringify(Me.CheckedCell(rowIndex, name)))
+    End Function
+
+    Public Function Row(rowIndex As Integer) As JSONItem
+        Return Json.Parse(Json.Stringify(Me.CheckedRow(rowIndex)))
+    End Function
+
+    Public Function Snapshot() As JSONItem
+        Return Json.Parse(Json.Stringify(mData))
+    End Function
+
+    Public Function StringValue(rowIndex As Integer, name As String) As String
+        Dim cell As JSONItem = Me.CheckedCell(rowIndex, name)
+        If Not cell.IsString() Then Throw New InvalidArgumentException("JSONRows field is not a string: " + name)
+        Return cell.AsString().Value
+    End Function
+
+    Public Function NumberValue(rowIndex As Integer, name As String) As Double
+        Dim cell As JSONItem = Me.CheckedCell(rowIndex, name)
+        If Not cell.IsNumber() Then Throw New InvalidArgumentException("JSONRows field is not a number: " + name)
+        Return cell.AsNumber().Value
+    End Function
+
+    Public Function BooleanValue(rowIndex As Integer, name As String) As Boolean
+        Dim cell As JSONItem = Me.CheckedCell(rowIndex, name)
+        If Not cell.IsBoolean() Then Throw New InvalidArgumentException("JSONRows field is not a boolean: " + name)
+        Return cell.AsBoolean().Value
+    End Function
+
+    Public Function NewCursor() As JSONRowsCursor
+        Return New JSONRowsCursor(Me)
+    End Function
+End Class
+
+''' Independent cursor, initially before the first row, then after-last at EOF.
+Public Class JSONRowsCursor
+    Private Property mTable As JSONRowsTable
+    Private Property mPosition As Integer = -1
+
+    Public Sub Constructor(table As JSONRowsTable)
+        If table Is Nil Then Throw New InvalidArgumentException("JSONRows cursor requires a table")
+        mTable = table
+    End Sub
+
+    Public Property Position As Integer
+        Get
+            Return mPosition
+        End Get
+    End Property
+
+    Public Sub Reset()
+        mPosition = -1
+    End Sub
+
+    Public Function MoveNext() As Boolean
+        If mPosition < mTable.RowCount Then mPosition += 1
+        Return mPosition < mTable.RowCount
+    End Function
+
+    Public Sub MoveTo(rowIndex As Integer)
+        If rowIndex < 0 Or rowIndex >= mTable.RowCount Then Throw New InvalidArgumentException("JSONRows cursor index out of bounds")
+        mPosition = rowIndex
+    End Sub
+
+    Public Function HasField(name As String) As Boolean
+        Return mTable.HasField(mPosition, name)
+    End Function
+
+    Public Function CellKind(name As String) As Integer
+        Return mTable.CellKind(mPosition, name)
+    End Function
+
+    Public Function Cell(name As String) As JSONItem
+        Return mTable.Cell(mPosition, name)
+    End Function
+
+    Public Function StringValue(name As String) As String
+        Return mTable.StringValue(mPosition, name)
+    End Function
+
+    Public Function NumberValue(name As String) As Double
+        Return mTable.NumberValue(mPosition, name)
+    End Function
+
+    Public Function BooleanValue(name As String) As Boolean
+        Return mTable.BooleanValue(mPosition, name)
+    End Function
+End Class
