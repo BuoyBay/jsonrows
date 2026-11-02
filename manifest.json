@@ -1,1 +1,1 @@
-{"schema":1,"name":"jsonrows","version":"0.1.0","description":"Bounded immutable JSON object tables with exact types and independent cursors"}
+{"schema":1,"name":"jsonrows","version":"0.1.0","description":"Immutable JSON object tables, typed cursors"}
