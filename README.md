@@ -2,7 +2,7 @@
 
 An immutable, bounded table of JSON objects for API responses and local JSON data.
 `Import jsonrows` exposes `JSONRowsTable` and independent `JSONRowsCursor` values.
-There are no native or package dependencies beyond Buoy's JSON prelude.
+There are no native or package dependencies beyond the JSON prelude.
 
 ## Install
 
@@ -46,7 +46,6 @@ On your own machine, install Buoy and run:
 buoy ai init --both
 ```
 
-The generated agent files and editor settings stay local and are ignored by Git.
 
 ## Contributing
 

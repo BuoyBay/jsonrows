@@ -63,14 +63,11 @@ after parsing; this is not a streaming parser. Column union uses an exact linear
 lookup, with worst-case O(total field count × union columns) comparisons. A copy
 costs O(the returned JSON subtree), bounded by the original accepted input.
 
-## Example and verification
-
-Maintainers run the private validation suite before release. See the repository README for public build instructions.
+## Scope
 
 This is a focused independent adapter inspired by JsonRowSet. SQL metadata,
 database conversions, mutations/SaveRow, heterogeneous Variant coercion,
 streaming and reactive UI bindings are outside its contract. See
 provenance for upstream evidence and intentional differences.
-
 
 [Typed API](typed-api.md) · [Getting started](getting-started.md)
