@@ -1,4 +1,4 @@
-# Immutable JSON object tables, typed cursors
+# JSON object tables
 
 An immutable, bounded table of JSON objects for API responses and local JSON data.
 `Import jsonrows` exposes `JSONRowsTable` and independent `JSONRowsCursor` values.
